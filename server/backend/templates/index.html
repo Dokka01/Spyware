@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spyware Control Panel</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid black;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>Spyware Control Panel</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Hostname</th>
+                <th>OS Info</th>
+                <th>Private IP</th>
+                <th>Public IP</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for machine in machines %}
+            <tr>
+                <td>{{ machine[0] }}</td>
+                <td>{{ machine[1] }}</td>
+                <td>{{ machine[2] }}</td>
+                <td>{{ machine[3] }}</td>
+                <td>{{ machine[4] }}</td>
+                <td>
+                    <button onclick="alert('Take Screenshot for {{ machine[1] }}')">Take Screenshot</button>
+                    <button onclick="alert('Fetch Logs for {{ machine[1] }}')">Fetch Logs</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
