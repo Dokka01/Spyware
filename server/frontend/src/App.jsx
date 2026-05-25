@@ -2,7 +2,7 @@ import { BrowserRouter as Router, Route, Routes } from 'react-router-dom'
 import Sidebar from '@/components/layout/Sidebar'
 import Dashboard from '@/pages/Dashboard'
 import Settings from '@/pages/Settings'
-import './App.css'
+import MachineDetail from '@/pages/MachineDetail'
 
 export default function App() {
   return (
@@ -11,8 +11,9 @@ export default function App() {
         <Sidebar />
         <main className="flex-1 overflow-y-auto">
           <Routes>
-            <Route path="/"         element={<Dashboard />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/"            element={<Dashboard />} />
+            <Route path="/machine/:id" element={<MachineDetail />} />
+            <Route path="/settings"    element={<Settings />} />
           </Routes>
         </main>
       </div>
