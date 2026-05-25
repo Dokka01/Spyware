@@ -34,9 +34,15 @@ def init_db():
     ''')
 
     existing_columns = {row[1] for row in conn.execute('PRAGMA table_info(machines)').fetchall()}
-    for col in ('last_seen', 'pending_command', 'command_result'):
+    for col, definition in (
+        ('private_ip',      'TEXT'),
+        ('public_ip',       'TEXT'),
+        ('last_seen',       'DATETIME DEFAULT CURRENT_TIMESTAMP'),
+        ('pending_command', 'TEXT'),
+        ('command_result',  'TEXT'),
+    ):
         if col not in existing_columns:
-            conn.execute(f'ALTER TABLE machines ADD COLUMN {col} TEXT')
+            conn.execute(f'ALTER TABLE machines ADD COLUMN {col} {definition}')
 
     conn.commit()
     conn.close()
