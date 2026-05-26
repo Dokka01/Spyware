@@ -216,6 +216,7 @@ export default function MachineDetail() {
   const navigate  = useNavigate()
   const [machine, setMachine] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     fetchMachine(id)
@@ -244,7 +245,6 @@ export default function MachineDetail() {
   }
 
   const status = getMachineStatus(machine.last_seen)
-  const [deleting, setDeleting] = useState(false)
 
   const FOLDERS = ['Documents', 'Images', 'Videos', 'Bureau']
 
