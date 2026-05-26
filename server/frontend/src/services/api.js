@@ -37,3 +37,10 @@ export async function fetchResult(id) {
 export function getDownloadUrl(id, filename) {
   return `${BASE_URL}/${id}/download/${filename}`
 }
+
+// Supprime une machine et ses fichiers
+export async function deleteMachine(id) {
+  const res = await fetch(`${BASE_URL}/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`Erreur suppression : ${res.status}`)
+  return res.json()
+}
