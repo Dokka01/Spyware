@@ -128,6 +128,14 @@ function KeylogSection({ machineId }) {
   )
 }
 
+// Détermine le badge de statut selon quand la machine a été vue pour la dernière fois
+function getMachineStatus(lastSeen) {
+  const diff = Date.now() - new Date(lastSeen).getTime()
+  if (diff < 5 * 60 * 1000)  return { label: 'Online',  cls: 'border-primary/30 bg-primary/10 text-primary' }
+  if (diff < 30 * 60 * 1000) return { label: 'Idle',    cls: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-500' }
+  return                              { label: 'Offline', cls: 'border-muted bg-muted/10 text-muted-foreground' }
+}
+
 // Affiche le résultat screenshot (image ou message)
 function ScreenshotResult({ machineId, result }) {
   if (result.type !== 'file') {
@@ -235,13 +243,7 @@ export default function MachineDetail() {
     )
   }
 
-  // Calcul du statut pour le badge d'en-tête
-  const statusLabel = (() => {
-    const diff = Date.now() - new Date(machine.last_seen).getTime()
-    if (diff < 5 * 60 * 1000)  return { label: 'Online',  cls: 'border-primary/30 bg-primary/10 text-primary' }
-    if (diff < 30 * 60 * 1000) return { label: 'Idle',    cls: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-500' }
-    return                              { label: 'Offline', cls: 'border-muted bg-muted/10 text-muted-foreground' }
-  })()
+  const status = getMachineStatus(machine.last_seen)
 
   const FOLDERS = ['Documents', 'Images', 'Videos', 'Bureau']
 
@@ -256,8 +258,8 @@ export default function MachineDetail() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-semibold font-mono">{machine.hostname}</h1>
-            <Badge variant="outline" className={cn('text-xs', statusLabel.cls)}>
-              {statusLabel.label}
+            <Badge variant="outline" className={cn('text-xs', status.cls)}>
+              {status.label}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground mt-0.5">
