@@ -171,7 +171,11 @@ export default function Dashboard() {
               </Button>
             </div>
           ) : (
-            <MachineTable machines={filteredMachines} loading={loading} />
+            <MachineTable
+            machines={filteredMachines}
+            loading={loading}
+            onDelete={(id) => setMachines((prev) => prev.filter((m) => m.id !== id))}
+          />
           )}
         </CardContent>
       </Card>

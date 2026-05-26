@@ -1,26 +1,15 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Monitor } from 'lucide-react'
+import { Monitor, Trash2, Loader2 } from 'lucide-react'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { deleteMachine } from '@/services/api'
 
-// Convertit une date ISO en temps relatif lisible ("2m ago", "1h ago"...)
-function formatRelativeTime(dateStr) {
-  if (!dateStr) return '—'
-  const diff    = Date.now() - new Date(dateStr).getTime()
-  const seconds = Math.floor(diff / 1000)
-  if (seconds < 60)  return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60)  return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24)    return `${hours}h ago`
-  return new Date(dateStr).toLocaleDateString()
-}
-
-// Détermine le statut de la machine selon quand elle a été vue pour la dernière fois
 function getStatus(lastSeen) {
   if (!lastSeen) return 'unknown'
   const diff = Date.now() - new Date(lastSeen).getTime()
@@ -29,7 +18,6 @@ function getStatus(lastSeen) {
   return 'offline'
 }
 
-// Petit rond coloré indiquant le statut de la machine
 function StatusDot({ lastSeen }) {
   const status = getStatus(lastSeen)
   return (
@@ -42,7 +30,6 @@ function StatusDot({ lastSeen }) {
   )
 }
 
-// Badge OS coloré selon le système d'exploitation détecté
 function OSBadge({ osInfo }) {
   const raw   = osInfo ?? ''
   const lower = raw.toLowerCase()
@@ -61,7 +48,6 @@ function OSBadge({ osInfo }) {
   )
 }
 
-// Affiche des lignes skeleton pendant que les données chargent
 function SkeletonRows() {
   return Array.from({ length: 5 }).map((_, i) => (
     <TableRow key={i} className="hover:bg-transparent">
@@ -71,15 +57,26 @@ function SkeletonRows() {
       <TableCell><Skeleton className="h-5 w-24" /></TableCell>
       <TableCell><Skeleton className="h-4 w-28" /></TableCell>
       <TableCell><Skeleton className="h-4 w-28" /></TableCell>
-      <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+      <TableCell><Skeleton className="h-6 w-6" /></TableCell>
     </TableRow>
   ))
 }
 
-export default function MachineTable({ machines, loading }) {
+export default function MachineTable({ machines, loading, onDelete }) {
   const navigate = useNavigate()
+  const [deleting, setDeleting] = useState(new Set())
 
-  // Pendant le chargement, on affiche le tableau avec des skeletons
+  async function handleDelete(e, id) {
+    e.stopPropagation()
+    setDeleting((prev) => new Set(prev).add(id))
+    try {
+      await deleteMachine(id)
+      onDelete?.(id)
+    } finally {
+      setDeleting((prev) => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
+
   if (loading) {
     return (
       <Table>
@@ -88,7 +85,7 @@ export default function MachineTable({ machines, loading }) {
             <TableHead>#</TableHead><TableHead></TableHead>
             <TableHead>Hostname</TableHead><TableHead>OS</TableHead>
             <TableHead>IP Privée</TableHead><TableHead>IP Publique</TableHead>
-            <TableHead>Vu il y a</TableHead>
+            <TableHead className="w-10"></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody><SkeletonRows /></TableBody>
@@ -96,7 +93,6 @@ export default function MachineTable({ machines, loading }) {
     )
   }
 
-  // Si aucune machine n'a encore check-in
   if (machines.length === 0) {
     return (
       <div className="flex flex-col items-center gap-3 py-20 text-muted-foreground">
@@ -117,12 +113,11 @@ export default function MachineTable({ machines, loading }) {
           <TableHead>OS</TableHead>
           <TableHead>IP Privée</TableHead>
           <TableHead>IP Publique</TableHead>
-          <TableHead>Vu il y a</TableHead>
+          <TableHead className="w-10"></TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {machines.map((machine) => (
-          // Chaque ligne est cliquable et navigue vers la page de détail
           <TableRow
             key={machine.id}
             className="cursor-pointer hover:bg-muted/50"
@@ -134,7 +129,20 @@ export default function MachineTable({ machines, loading }) {
             <TableCell><OSBadge osInfo={machine.os_info} /></TableCell>
             <TableCell className="font-mono text-xs text-muted-foreground">{machine.private_ip ?? '—'}</TableCell>
             <TableCell className="font-mono text-xs text-muted-foreground">{machine.public_ip ?? '—'}</TableCell>
-            <TableCell className="text-xs text-muted-foreground">{formatRelativeTime(machine.last_seen)}</TableCell>
+            <TableCell>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                disabled={deleting.has(machine.id)}
+                onClick={(e) => handleDelete(e, machine.id)}
+              >
+                {deleting.has(machine.id)
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Trash2 className="h-3.5 w-3.5" />
+                }
+              </Button>
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>
