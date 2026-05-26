@@ -9,27 +9,19 @@ void get_hostname(char *hostname, int size) {
         strncpy(hostname, "Unknown", size - 1);
 }
 
-/*
- * Uses RtlGetVersion via a runtime import to bypass the deprecated
- * GetVersionEx manifest requirement on Windows 8.1+.
- */
-void get_os_version(char *os_info, int size) {
-    typedef LONG (WINAPI *RtlGetVersionFunc)(PRTL_OSVERSIONINFOW);
+void get_os_version(char *buf, int size) {
+    RTL_OSVERSIONINFOW v = { sizeof(v) };
 
+    /* RtlGetVersion (ntdll) retourne la vraie version Windows, contrairement à
+       GetVersionEx qui est dépréciée et renvoie une valeur tronquée sur Win 8.1+ */
     HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-    RtlGetVersionFunc RtlGetVersion =
-        (RtlGetVersionFunc)GetProcAddress(ntdll, "RtlGetVersion");
+    LONG (WINAPI *RtlGetVersion)(PRTL_OSVERSIONINFOW) =
+        (void *)GetProcAddress(ntdll, "RtlGetVersion");
 
-    if (RtlGetVersion) {
-        RTL_OSVERSIONINFOW osvi = { sizeof(RTL_OSVERSIONINFOW) };
-        if (RtlGetVersion(&osvi) == 0) {
-            snprintf(os_info, size, "Windows %lu.%lu (Build %lu)",
-                     osvi.dwMajorVersion,
-                     osvi.dwMinorVersion,
-                     osvi.dwBuildNumber);
-            return;
-        }
+    if (RtlGetVersion && RtlGetVersion(&v) == 0) {
+        snprintf(buf, size, "Windows %lu.%lu (Build %lu)",
+                 v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber);
+    } else {
+        strncpy(buf, "Windows (inconnu)", size - 1);
     }
-
-    strncpy(os_info, "Windows (Unknown)", size - 1);
 }

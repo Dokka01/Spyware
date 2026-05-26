@@ -6,9 +6,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Callback curl : copie la réponse dans un buffer fixe passé en userdata */
+static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *buf) {
+    strncat((char *)buf, (char *)ptr, size * nmemb);
+    return size * nmemb;
+}
+
 void get_private_ip(char *ip, int size) {
     char hostname[BUFFER_SIZE];
-
     if (gethostname(hostname, sizeof(hostname)) != 0) {
         strncpy(ip, "Unknown", size - 1);
         return;
@@ -28,35 +33,17 @@ void get_private_ip(char *ip, int size) {
     }
 }
 
-static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata) {
-    size_t total    = size * nmemb;
-    char  *buf      = (char *)userdata;
-    size_t cur_len  = strlen(buf);
-    size_t capacity = BUFFER_SIZE - cur_len - 1;
-
-    if (total > capacity)
-        total = capacity;
-
-    strncat(buf, (char *)ptr, total);
-    return size * nmemb;
-}
-
 void get_public_ip(char *ip, int size) {
     ip[0] = '\0';
-
     CURL *curl = curl_easy_init();
-    if (!curl) {
-        strncpy(ip, "Unknown", size - 1);
-        return;
-    }
+    if (!curl) { strncpy(ip, "Unknown", size - 1); return; }
 
     curl_easy_setopt(curl, CURLOPT_URL, "https://api.ipify.org");
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, ip);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 
-    CURLcode res = curl_easy_perform(curl);
-    if (res != CURLE_OK)
+    if (curl_easy_perform(curl) != CURLE_OK)
         strncpy(ip, "Unknown", size - 1);
 
     curl_easy_cleanup(curl);

