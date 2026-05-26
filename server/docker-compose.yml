@@ -1,0 +1,27 @@
+services:
+
+  backend:
+    build:
+      context: ./backend
+    container_name: spyware-backend
+    ports:
+      - "5000:5000"
+    volumes:
+      # Persist the SQLite database outside the container
+      - spyware-db:/app/db
+    environment:
+      - DATABASE_PATH=/app/db/spyware.db
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: spyware-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  spyware-db:
