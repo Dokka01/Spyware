@@ -202,7 +202,7 @@ function FolderButton({ folder, machineId }) {
       </Button>
       {result?.type === 'file' && (
         <Button size="sm" variant="ghost" className="h-6 text-xs" asChild>
-          <a href={getDownloadUrl(machineId, result.filename)} download>
+          <a href={getDownloadUrl(machineId, `${folder}.zip`)} download>
             Télécharger {folder}.zip
           </a>
         </Button>
